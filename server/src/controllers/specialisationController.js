@@ -10,4 +10,13 @@ export const specialisationController = {
       next(err);
     }
   },
+
+  createSpecialisation: async (req, res, next) => {
+    try {
+      const specialisation = await specialisationService.createSpecialisation(req.body.name);
+      return sendSuccess(res, 201, specialisation);
+    } catch (err) {
+      next(err);
+    }
+  },
 };

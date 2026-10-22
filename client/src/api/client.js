@@ -22,8 +22,27 @@ const ERROR_CODE_MESSAGES = {
   INVALID_TRANSITION: 'This appointment cannot be cancelled in its current state.',
   RATE_LIMIT_EXCEEDED: 'Too many requests. Please slow down and try again in a few moments.',
   NETWORK_ERROR: 'Unable to connect to the ClinicFlow server. Please ensure the backend is running.',
+  UNAUTHORIZED: 'Session expired or invalid credentials. Please log in again.',
+  INVALID_CREDENTIALS: 'The email address or password you entered is incorrect.',
+  DOCTOR_BUSY: 'Another patient is currently in consultation. Please complete or skip that consultation first.',
+  NO_PATIENTS_WAITING: 'There are no waiting patients in queue for this doctor.',
+  CANNOT_SKIP: 'Only waiting patients can be skipped.',
+  CANNOT_COMPLETE: 'Only in-consultation patients can be marked completed.',
 };
 
+// 1. Request interceptor: Attach JWT Bearer token if present
+apiClient.interceptors.request.use(
+  (config) => {
+    const token = localStorage.getItem('clinicflow_staff_token');
+    if (token) {
+      config.headers.Authorization = `Bearer ${token}`;
+    }
+    return config;
+  },
+  (error) => Promise.reject(error)
+);
+
+// 2. Response interceptor: Extract data and handle 401s / friendly errors
 apiClient.interceptors.response.use(
   (response) => {
     // Backend wraps successful responses in { success: true, data: ..., meta: ... }
@@ -39,6 +58,18 @@ apiClient.interceptors.response.use(
       code = 'NETWORK_ERROR';
     } else {
       const { data, status } = error.response;
+
+      // Handle 401 Unauthorized: clear token and notify auth context
+      if (status === 401) {
+        if (!error.config?.url?.includes('/auth/login')) {
+          localStorage.removeItem('clinicflow_staff_token');
+          localStorage.removeItem('clinicflow_staff_user');
+          window.dispatchEvent(new CustomEvent('clinicflow:unauthorized'));
+        }
+        code = 'UNAUTHORIZED';
+        friendlyMessage = ERROR_CODE_MESSAGES.UNAUTHORIZED;
+      }
+
       if (data && data.error) {
         code = data.error.code || code;
         details = data.error.details || [];

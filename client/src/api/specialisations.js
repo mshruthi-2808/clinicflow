@@ -5,4 +5,9 @@ export const specialisationsApi = {
     const res = await apiClient.get('/specialisations');
     return res.data;
   },
+
+  create: async (name) => {
+    const res = await apiClient.post('/specialisations', { name });
+    return res.data;
+  },
 };

@@ -12,4 +12,10 @@ export const specialisationRepository = {
       where: { id },
     });
   },
+
+  create: async (data) => {
+    return prisma.specialisation.create({
+      data,
+    });
+  },
 };

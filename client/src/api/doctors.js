@@ -28,4 +28,19 @@ export const doctorsApi = {
     });
     return res.data;
   },
+
+  createDoctor: async (payload) => {
+    const res = await apiClient.post('/doctors', payload);
+    return res.data;
+  },
+
+  updateDoctor: async (id, payload) => {
+    const res = await apiClient.put(`/doctors/${id}`, payload);
+    return res.data;
+  },
+
+  deactivateDoctor: async (id) => {
+    const res = await apiClient.delete(`/doctors/${id}`);
+    return res.data;
+  },
 };

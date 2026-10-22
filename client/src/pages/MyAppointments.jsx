@@ -9,6 +9,7 @@ import {
   AlertCircle,
   ArrowRight,
   RefreshCw,
+  Activity,
 } from 'lucide-react';
 import { useAppointments, useCancelAppointment } from '../hooks/useAppointments.js';
 import StatusBadge from '../components/StatusBadge.jsx';
@@ -305,6 +306,25 @@ export default function MyAppointments() {
                         </div>
 
                         <div className="flex items-center gap-2">
+                          {(apt.status === 'CHECKED_IN' || apt.status === 'IN_CONSULTATION') && (
+                            <Link
+                              to={`/queue/${apt.id}`}
+                              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold text-teal-700 bg-teal-50 hover:bg-teal-100 border border-teal-200 rounded-xl transition shadow-2xs"
+                            >
+                              <Activity className="w-3.5 h-3.5 text-teal-600 animate-pulse" />
+                              <span>Track Live Queue</span>
+                            </Link>
+                          )}
+
+                          {apt.status === 'BOOKED' && (
+                            <Link
+                              to={`/queue/${apt.id}`}
+                              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 border border-slate-200 rounded-xl transition"
+                            >
+                              <span>View status</span>
+                            </Link>
+                          )}
+
                           {isCancellable && (
                             <button
                               type="button"

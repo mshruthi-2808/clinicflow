@@ -24,7 +24,7 @@ export default function Footer() {
             </p>
             <div className="flex items-center gap-2 text-xs text-slate-600 pt-1">
               <Shield className="w-4 h-4 text-teal-600" />
-              <span>College Mini Project Demo • Production-grade architecture</span>
+              <span>College mini project demo</span>
             </div>
           </div>
 

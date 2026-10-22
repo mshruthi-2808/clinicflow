@@ -35,12 +35,12 @@ async function main() {
 
   // 3. Seed 5 Fictional Doctors with weekly schedules (Mon to Sat)
   const standardSchedule = {
-    mon: { start: '09:00', end: '13:00' },
-    tue: { start: '09:00', end: '13:00' },
-    wed: { start: '09:00', end: '13:00' },
-    thu: { start: '09:00', end: '13:00' },
-    fri: { start: '09:00', end: '13:00' },
-    sat: { start: '09:00', end: '12:00' },
+    mon: { start: '09:00', end: '20:00' },
+    tue: { start: '09:00', end: '20:00' },
+    wed: { start: '09:00', end: '20:00' },
+    thu: { start: '09:00', end: '20:00' },
+    fri: { start: '09:00', end: '20:00' },
+    sat: { start: '09:00', end: '18:00' },
   };
 
   const doctorData = [
