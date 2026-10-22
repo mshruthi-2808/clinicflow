@@ -1,0 +1,88 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+enum AppointmentStatus {
+  BOOKED
+  CHECKED_IN
+  IN_CONSULTATION
+  COMPLETED
+  CANCELLED
+  NO_SHOW
+}
+
+enum QueueStatus {
+  WAITING
+  IN_CONSULTATION
+  COMPLETED
+  SKIPPED
+}
+
+model Specialisation {
+  id      String   @id @default(uuid())
+  name    String   @unique
+  doctors Doctor[]
+}
+
+model Doctor {
+  id                   String         @id @default(uuid())
+  name                 String
+  specialisationId     String
+  specialisation       Specialisation @relation(fields: [specialisationId], references: [id])
+  consultationMinutes  Int            @default(15)
+  slotMinutes          Int            @default(15)
+  schedule             Json
+  isActive             Boolean        @default(true)
+  appointments         Appointment[]
+  queueEntries         QueueEntry[]
+
+  @@index([schedule], type: Gin, map: "idx_doctor_schedule_gin")
+}
+
+model Appointment {
+  id              String            @id @default(uuid())
+  doctorId        String
+  doctor          Doctor            @relation(fields: [doctorId], references: [id], onDelete: Cascade)
+  patientName     String
+  patientPhone    String
+  reason          String?
+  appointmentDate DateTime          @db.Date
+  slotStart       String
+  status          AppointmentStatus @default(BOOKED)
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+  queueEntry      QueueEntry?
+
+  @@index([doctorId, appointmentDate])
+}
+
+model QueueEntry {
+  id            String      @id @default(uuid())
+  appointmentId String      @unique
+  appointment   Appointment @relation(fields: [appointmentId], references: [id], onDelete: Cascade)
+  doctorId      String
+  doctor        Doctor      @relation(fields: [doctorId], references: [id], onDelete: Cascade)
+  queueDate     DateTime    @db.Date
+  tokenNumber   Int
+  status        QueueStatus @default(WAITING)
+  checkedInAt   DateTime    @default(now())
+  calledAt      DateTime?
+  completedAt   DateTime?
+
+  @@unique([doctorId, queueDate, tokenNumber])
+  @@index([doctorId, queueDate, status])
+}
+
+model StaffUser {
+  id           String   @id @default(uuid())
+  email        String   @unique
+  passwordHash String
+  name         String
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+}
