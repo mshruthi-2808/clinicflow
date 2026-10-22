@@ -18,6 +18,9 @@ export const errorHandler = (err, req, res, next) => {
       String(err.meta?.target).includes('uniq_active_slot')
     ) {
       message = 'This slot is already booked';
+    } else if (target.includes('appointmentId') || String(err.meta?.target).includes('appointmentId')) {
+      code = 'ALREADY_CHECKED_IN';
+      message = 'This patient is already checked in';
     } else if (target.includes('email')) {
       message = 'A user with this email already exists';
     } else if (target.includes('name')) {
