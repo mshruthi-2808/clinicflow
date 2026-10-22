@@ -182,11 +182,187 @@ WHERE tablename = 'Doctor' AND indexname = 'idx_doctor_schedule_gin';
 
 ---
 
-## 🔑 Seed Staff Credentials
+## 🔑 Demo Staff Area & Credentials
+
+> [!NOTE]
+> **Demo Staff Notice**: The staff authentication area (`/api/v1/auth/login`) and protected staff doctor management endpoints are provided for demonstrative and evaluation purposes for this college mini-project. It uses a straightforward JWT Bearer token mechanism with no complex multi-role or session logic.
 
 For testing and demonstration, the initial staff user seeded into the database is:
 - **Email:** `staff@clinicflow.local`
-- **Password:** `ClinicStaff123!` *(or the value specified in your `.env`)*
+- **Password:** `ClinicStaff123!` *(or the value configured in `.env`)*
+
+---
+
+## 📡 API Endpoints (v1)
+
+Base URL: `http://localhost:5001/api/v1`
+
+### Standard Response Format
+- **Success:**
+  ```json
+  { "success": true, "data": { ... }, "meta": { "page": 1, "limit": 10, "total": 5, "totalPages": 1 } }
+  ```
+- **Error:**
+  ```json
+  { "success": false, "error": { "code": "ERROR_CODE", "message": "Detailed message" } }
+  ```
+
+### Endpoints Overview
+| Method | Path | Auth | Description |
+| :--- | :--- | :--- | :--- |
+| `GET` | `/health` | Public | Service health status |
+| `POST` | `/auth/login` | Public | Staff demo login, returns JWT token |
+| `GET` | `/specialisations` | Public | List medical specialisations |
+| `GET` | `/doctors` | Public | List doctors with filtering, sorting, pagination |
+| `GET` | `/doctors/:id` | Public | Get doctor profile by ID |
+| `GET` | `/doctors/:id/slots?date=YYYY-MM-DD` | Public | Get availability slots for a doctor on a given date |
+| `POST` | `/doctors` | Staff (JWT) | Create doctor profile |
+| `PUT` | `/doctors/:id` | Staff (JWT) | Update doctor profile |
+| `DELETE` | `/doctors/:id` | Staff (JWT) | Soft delete doctor (`isActive = false`) |
+| `POST` | `/appointments` | Public | Book a new appointment slot |
+| `GET` | `/appointments` | Public | Search and list appointments |
+| `GET` | `/appointments/:id` | Public | Get appointment details by ID |
+| `PATCH` | `/appointments/:id/cancel` | Public | Cancel appointment (releases slot) |
+| `POST` | `/queue/check-in` | Staff (JWT) | Check in appointment to issue queue token |
+| `GET` | `/queue/doctor/:doctorId?date=` | Staff (JWT) | Live doctor queue with CTE window function positions & wait times |
+| `GET` | `/queue/appointment/:appointmentId` | Public | Patient's queue view (token, status, position, patients ahead, estimated wait) |
+| `POST` | `/queue/doctor/:doctorId/call-next` | Staff (JWT) | Call lowest-token waiting patient into consultation |
+| `POST` | `/queue/:entryId/complete` | Staff (JWT) | Complete consultation for active queue entry |
+| `POST` | `/queue/:entryId/skip` | Staff (JWT) | Skip waiting patient (Queue: SKIPPED, Appointment: NO_SHOW) |
+| `GET` | `/stats?date=` | Public | Clinic statistics (total, waiting, in consultation, completed, cancelled, no-show) |
+
+---
+
+## 🧪 Testing Phase 3 with cURL (Queue Engine Demo)
+
+Run these curl commands to demonstrate patient check-in, live queue positions, calling patients, completing consultations, and duplicate prevention.
+
+### Step 0: Get Staff JWT Token
+```bash
+TOKEN=$(curl -s -X POST http://localhost:5001/api/v1/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"email":"staff@clinicflow.local","password":"ClinicStaff123!"}' | grep -o '"token":"[^"]*' | cut -d'"' -f4)
+```
+
+### Step 1: Check in 3 Patients for Today
+```bash
+# Check in Patient 1 (Manish Gupta)
+curl -s -X POST http://localhost:5001/api/v1/queue/check-in \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $TOKEN" \
+  -d '{"appointmentId":"40000000-0000-0000-0000-000000000006"}'
+
+# Check in Patient 2 (Ramesh Kumar)
+curl -s -X POST http://localhost:5001/api/v1/queue/check-in \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $TOKEN" \
+  -d '{"appointmentId":"40000000-0000-0000-0000-000000000018"}'
+
+# Check in Patient 3 (Priya Varma)
+curl -s -X POST http://localhost:5001/api/v1/queue/check-in \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $TOKEN" \
+  -d '{"appointmentId":"40000000-0000-0000-0000-000000000019"}'
+```
+*Response shape (clean object with updated status and doctorName only):*
+```json
+{
+  "success": true,
+  "data": {
+    "queueEntry": {
+      "id": "...",
+      "tokenNumber": 6,
+      "status": "WAITING",
+      "checkedInAt": "2026-10-22T07:09:12.214Z"
+    },
+    "appointment": {
+      "id": "40000000-0000-0000-0000-000000000006",
+      "patientName": "Manish Gupta",
+      "appointmentDate": "2026-10-22",
+      "slotStart": "10:15",
+      "status": "CHECKED_IN",
+      "doctorName": "Dr. Priya Sharma"
+    }
+  }
+}
+```
+
+### Step 2: Attempt Duplicate Check-in (Rejected with 409)
+Run the exact same check-in command again:
+```bash
+curl -s -X POST http://localhost:5001/api/v1/queue/check-in \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $TOKEN" \
+  -d '{"appointmentId":"40000000-0000-0000-0000-000000000006"}'
+```
+*Response (HTTP 409):*
+```json
+{
+  "success": false,
+  "error": {
+    "code": "ALREADY_CHECKED_IN",
+    "message": "This patient is already checked in"
+  }
+}
+```
+
+### Step 3: View Live Doctor Queue (Staff Protected)
+View Dr. Priya Sharma's queue (`20000000-0000-0000-0000-000000000001`):
+```bash
+curl -s "http://localhost:5001/api/v1/queue/doctor/20000000-0000-0000-0000-000000000001" \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+### Step 4: View Patient's Own Queue Status (Public)
+Patient only needs their appointment ID:
+```bash
+curl -s "http://localhost:5001/api/v1/queue/appointment/40000000-0000-0000-0000-000000000006"
+```
+*Output (Returns only that patient's own metrics, no PII or phone numbers):*
+```json
+{
+  "success": true,
+  "data": {
+    "token": 6,
+    "status": "WAITING",
+    "position": 3,
+    "patientsAhead": 2,
+    "estimatedWaitMinutes": 45,
+    "isEstimate": true,
+    "disclaimer": "Estimated wait time is approximate and may vary depending on patient consultation needs."
+  }
+}
+```
+*Note the current patient `IN_CONSULTATION`, the ordered `WAITING` patients with `position: 1, 2, ...`, and `estimatedWaitMinutes` labeled as an estimate.*
+
+### Step 4: Complete the Current Consultation
+Complete the consultation for the patient currently inside:
+```bash
+# Complete Rahul Nair (token 3)
+curl -X POST http://localhost:5001/api/v1/queue/5c55676b-5540-4b5e-aad2-8bc65e4bd830/complete \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+### Step 5: Call Next Patient
+Call the next lowest-token waiting patient:
+```bash
+curl -X POST http://localhost:5001/api/v1/queue/doctor/8db9ad70-e2a0-49c2-ad32-410e50261ac1/call-next \
+  -H "Authorization: Bearer $TOKEN"
+```
+*Picks token #4 (Pooja Hegde), marks status `IN_CONSULTATION`, and sets `calledAt`.*
+
+### Step 6: Verify Updated Queue Positions and Wait Times
+Inspect the live queue again:
+```bash
+curl -s "http://localhost:5001/api/v1/queue/doctor/8db9ad70-e2a0-49c2-ad32-410e50261ac1"
+```
+*Notice all waiting patient positions and estimated wait times automatically decrement!*
+
+### Step 7: Check Clinic Statistics
+```bash
+curl -s http://localhost:5001/api/v1/stats
+```
+*Response: Single-query aggregation of today's totalAppointments, waiting, inConsultation, completed, cancelled, and noShow counts.*
 
 ---
 
@@ -204,12 +380,19 @@ clinicflow/
 │   │   ├── schema.prisma     # Prisma data models, relations & constraints
 │   │   ├── seed.js           # Re-runnable database seeder
 │   │   └── migrations/       # SQL migration history
-│   │       ├── 20261022055039_init/
-│   │       │   └── migration.sql
-│   │       └── 20261022055051_add_slot_and_schedule_indexes/
-│   │           └── migration.sql
-│   └── src/                  # (Phase 2+) routes, controllers, services, repositories
-└── client/                   # (Phase 4+) Vite React frontend application
+│   └── src/
+│       ├── config/           # env configuration and PrismaClient singleton
+│       ├── utils/            # AppError, response helpers, dateTime utils
+│       ├── events/           # Queue events module (recordQueueEvent)
+│       ├── middleware/       # Zod validator, JWT auth, rateLimiter, errorHandler, 404
+│       ├── repositories/     # Database queries (Prisma isolation layer)
+│       ├── services/         # Business logic and appointment state machine
+│       ├── controllers/      # HTTP request and response handlers
+│       ├── validators/       # Zod request validation schemas
+│       ├── routes/           # Express API v1 route definitions
+│       ├── app.js            # Express app configuration
+│       └── server.js         # HTTP server entry point
+└── client/                   # (Phase 4) Vite React frontend application
 ```
 
 ---
@@ -220,16 +403,24 @@ clinicflow/
   - Schema design, models, relations, enums
   - Initial migration & handwritten raw SQL partial index migration
   - Idempotent seed script with realistic OPD test data
-- [ ] **Phase 2: Authentication & Doctor/Schedule APIs**
-  - Staff JWT authentication
-  - Public specialisation & doctor listing
-  - Slot availability engine based on doctor schedules & bookings
-- [ ] **Phase 3: Appointments & Queue Management Engine**
-  - Appointment booking with conflict prevention
-  - Check-in workflow & daily sequential token generation
-  - State machine transition guard (409 Conflict enforcement)
-  - Estimated wait-time calculation logic
+- [x] **Phase 2: Backend API for Doctors & Appointments**
+  - Express app with CORS, Helmet, Rate Limiting, Central Error Handling
+  - Zod validation for body, params, and query
+  - Public specialisations, doctors, and slot availability calculation
+  - Appointment booking with conflict prevention and slot freeing on cancellation
+  - Strict appointment state machine transition enforcement (assertTransition 409)
+  - Staff demo JWT authentication and protected doctor management
+- [x] **Phase 3: Appointments & Queue Management Engine**
+  - Patient check-in workflow with token concurrency retry (max 3)
+  - Live queue tracking with raw SQL CTE window function for positions
+  - Dynamic estimated wait time calculation (patientsAhead x avg + remaining in consultation)
+  - Patient own queue status view with estimate disclaimer
+  - Staff queue operations (call-next, complete, skip)
+  - Queue event recording stub
+  - Clinic statistics single-query aggregation
 - [ ] **Phase 4: Client Application (Patient & Staff Views)**
   - Patient appointment booking & live queue tracker
   - Staff queue control board & check-in terminal
   - Clinic statistics and summary metrics
+
+
