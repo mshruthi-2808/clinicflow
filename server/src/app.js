@@ -13,10 +13,19 @@ const app = express();
 // 1. Security HTTP headers
 app.use(helmet());
 
-// 2. CORS configuration (allow client origin from env)
+// 2. CORS configuration (allow client origin from env and any local dev port)
+const allowedOrigins = [config.clientOrigin, 'http://localhost:5173', 'http://localhost:5174', 'http://localhost:5175'];
+
 app.use(
   cors({
-    origin: config.clientOrigin,
+    origin: (origin, callback) => {
+      // Allow requests with no origin (like mobile apps, curl, server-to-server)
+      if (!origin) return callback(null, true);
+      if (allowedOrigins.includes(origin) || /^http:\/\/(localhost|127\.0\.0\.1):\d+$/.test(origin)) {
+        return callback(null, true);
+      }
+      return callback(new Error('Not allowed by CORS'));
+    },
     credentials: true,
   })
 );
