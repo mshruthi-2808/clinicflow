@@ -17,4 +17,12 @@ export const statsService = {
       ...stats,
     };
   },
+
+  /**
+   * Retrieves doctor average consultation durations with RANK() window function ordering
+   * @param {number|string} [days]
+   */
+  getDoctorAverages: async (days) => {
+    return statsRepository.getDoctorAverages(days);
+  },
 };

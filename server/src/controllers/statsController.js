@@ -10,4 +10,13 @@ export const statsController = {
       next(err);
     }
   },
+
+  getDoctorAverages: async (req, res, next) => {
+    try {
+      const doctorAverages = await statsService.getDoctorAverages(req.query.days);
+      return sendSuccess(res, 200, doctorAverages);
+    } catch (err) {
+      next(err);
+    }
+  },
 };

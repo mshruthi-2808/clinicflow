@@ -10,6 +10,7 @@ async function main() {
   console.log('Seeding ClinicFlow database...');
 
   // 1. Clean existing records in referential integrity order for re-runnability
+  await prisma.queueEvent.deleteMany();
   await prisma.queueEntry.deleteMany();
   await prisma.appointment.deleteMany();
   await prisma.doctor.deleteMany();
@@ -471,9 +472,52 @@ async function main() {
     },
   });
 
+  // 6. Seed Completed QueueEvents for historical analytics & averages
+  const completedEvents = [
+    {
+      doctorId: doc1Id,
+      appointmentId: '40000000-0000-0000-0000-000000000001',
+      tokenNumber: 1,
+      durationMinutes: 15,
+      createdAt: minutesAgo(30),
+      details: { patientName: 'Amit Kumar', slotStart: '09:00' },
+    },
+    {
+      doctorId: doc1Id,
+      appointmentId: '40000000-0000-0000-0000-000000000002',
+      tokenNumber: 2,
+      durationMinutes: 18,
+      createdAt: minutesAgo(12),
+      details: { patientName: 'Sneha Rao', slotStart: '09:15' },
+    },
+    {
+      doctorId: doc2Id,
+      appointmentId: '40000000-0000-0000-0000-000000000008',
+      tokenNumber: 1,
+      durationMinutes: 14,
+      createdAt: minutesAgo(14),
+      details: { patientName: 'Aarav Joshi', slotStart: '09:00' },
+    },
+  ];
+
+  for (const ev of completedEvents) {
+    await prisma.queueEvent.create({
+      data: {
+        type: 'COMPLETED',
+        doctorId: ev.doctorId,
+        appointmentId: ev.appointmentId,
+        tokenNumber: ev.tokenNumber,
+        durationMinutes: ev.durationMinutes,
+        details: ev.details,
+        createdAt: ev.createdAt,
+      },
+    });
+  }
+
   const totalAppointments = await prisma.appointment.count();
   const totalQueue = await prisma.queueEntry.count();
-  console.log(`Database seeded successfully! Total Appointments: ${totalAppointments}, Queue Entries: ${totalQueue}`);
+  const totalEvents = await prisma.queueEvent.count();
+  console.log(`Database seeded successfully! Total Appointments: ${totalAppointments}, Queue Entries: ${totalQueue}, Queue Events: ${totalEvents}`);
 }
 
 main()

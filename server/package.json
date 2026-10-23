@@ -9,7 +9,9 @@
     "dev": "node --watch src/server.js",
     "db:migrate": "prisma migrate dev",
     "db:seed": "node prisma/seed.js",
-    "db:reset": "prisma migrate reset --force"
+    "db:reset": "prisma migrate reset --force",
+    "benchmark": "node ../scripts/benchmark-index.js",
+    "race-test": "node ../scripts/race-test.js"
   },
   "prisma": {
     "seed": "node prisma/seed.js"

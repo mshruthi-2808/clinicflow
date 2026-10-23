@@ -37,4 +37,69 @@ export const statsRepository = {
       noShow: Number(stats.noShow) || 0,
     };
   },
+
+  /**
+   * Computes average consultation duration and RANK() window function ordering doctors.
+   * Parameterized via Prisma.$queryRaw.
+   * @param {number|null} [days] Optional days interval (e.g. 7)
+   */
+  getDoctorAverages: async (days) => {
+    const daysInterval = days ? Number(days) : null;
+
+    let rows;
+    if (daysInterval && !isNaN(daysInterval) && daysInterval > 0) {
+      rows = await prisma.$queryRaw`
+        SELECT 
+          d.id AS "doctorId",
+          d.name AS "doctorName",
+          s.name AS "specialisationName",
+          d."consultationMinutes" AS "configuredConsultationMinutes",
+          COUNT(qe.id)::int AS "completedConsultations",
+          ROUND(AVG(qe."durationMinutes"))::int AS "averageDurationMinutes",
+          RANK() OVER (
+            ORDER BY COALESCE(ROUND(AVG(qe."durationMinutes")), d."consultationMinutes") ASC
+          )::int AS "rank"
+        FROM "Doctor" d
+        JOIN "Specialisation" s ON s.id = d."specialisationId"
+        LEFT JOIN "QueueEvent" qe ON qe."doctorId" = d.id 
+          AND qe.type = 'COMPLETED'::"QueueEventType"
+          AND qe."createdAt" >= NOW() - (${daysInterval} * INTERVAL '1 day')
+          AND qe."durationMinutes" IS NOT NULL
+        WHERE d."isActive" = true
+        GROUP BY d.id, d.name, s.name, d."consultationMinutes"
+        ORDER BY "rank" ASC, d.name ASC;
+      `;
+    } else {
+      rows = await prisma.$queryRaw`
+        SELECT 
+          d.id AS "doctorId",
+          d.name AS "doctorName",
+          s.name AS "specialisationName",
+          d."consultationMinutes" AS "configuredConsultationMinutes",
+          COUNT(qe.id)::int AS "completedConsultations",
+          ROUND(AVG(qe."durationMinutes"))::int AS "averageDurationMinutes",
+          RANK() OVER (
+            ORDER BY COALESCE(ROUND(AVG(qe."durationMinutes")), d."consultationMinutes") ASC
+          )::int AS "rank"
+        FROM "Doctor" d
+        JOIN "Specialisation" s ON s.id = d."specialisationId"
+        LEFT JOIN "QueueEvent" qe ON qe."doctorId" = d.id 
+          AND qe.type = 'COMPLETED'::"QueueEventType"
+          AND qe."durationMinutes" IS NOT NULL
+        WHERE d."isActive" = true
+        GROUP BY d.id, d.name, s.name, d."consultationMinutes"
+        ORDER BY "rank" ASC, d.name ASC;
+      `;
+    }
+
+    return rows.map((r) => ({
+      doctorId: r.doctorId,
+      doctorName: r.doctorName,
+      specialisationName: r.specialisationName,
+      configuredConsultationMinutes: Number(r.configuredConsultationMinutes),
+      completedConsultations: Number(r.completedConsultations),
+      averageDurationMinutes: r.averageDurationMinutes !== null ? Number(r.averageDurationMinutes) : null,
+      rank: Number(r.rank),
+    }));
+  },
 };

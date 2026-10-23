@@ -1,7 +1,7 @@
+import prisma from '../config/prisma.js';
 import { queueRepository } from '../repositories/queueRepository.js';
 import { doctorRepository } from '../repositories/doctorRepository.js';
 import { appointmentRepository } from '../repositories/appointmentRepository.js';
-import { recordQueueEvent, QUEUE_EVENT_TYPES } from '../events/queueEvents.js';
 import { AppError } from '../utils/appError.js';
 import { config } from '../config/env.js';
 import { parseDateOnly, getTodayDateString, formatDateOnly } from '../utils/dateTime.js';
@@ -9,11 +9,32 @@ import { parseDateOnly, getTodayDateString, formatDateOnly } from '../utils/date
 export const queueService = {
   /**
    * Average consultation minutes function.
-   * Returns the doctor's consultationMinutes (Phase 6 will upgrade with historical analytics).
+   * Uses a CTE on COMPLETED QueueEvent records from the last 7 days.
+   * Falls back to the doctor's configured consultationMinutes when fewer than 3 completed.
    * @param {string} doctorId
    * @returns {Promise<number>}
    */
   getAverageConsultMinutes: async (doctorId) => {
+    const rows = await prisma.$queryRaw`
+      WITH recent_completed AS (
+        SELECT "durationMinutes"
+        FROM "QueueEvent"
+        WHERE "doctorId" = ${doctorId}
+          AND type = 'COMPLETED'::"QueueEventType"
+          AND "createdAt" >= NOW() - INTERVAL '7 days'
+          AND "durationMinutes" IS NOT NULL
+      )
+      SELECT 
+        COUNT(*)::int AS count,
+        ROUND(AVG("durationMinutes"))::int AS "avgMinutes"
+      FROM recent_completed;
+    `;
+
+    const stats = rows && rows[0];
+    if (stats && stats.count >= 3 && stats.avgMinutes !== null && stats.avgMinutes !== undefined) {
+      return Number(stats.avgMinutes);
+    }
+
     const doctor = await doctorRepository.findById(doctorId);
     return doctor?.consultationMinutes || config.defaultConsultMinutes || 15;
   },
@@ -32,19 +53,10 @@ export const queueService = {
 
   /**
    * Check in an appointment to generate a daily queue token (staff only)
+   * QueueEvent is atomically recorded within the database transaction in queueRepository.
    */
   checkIn: async (appointmentId) => {
-    const result = await queueRepository.checkInWithRetry(appointmentId);
-
-    // Record event
-    recordQueueEvent(QUEUE_EVENT_TYPES.CHECKED_IN, {
-      appointmentId,
-      doctorId: result.queueEntry.doctorId,
-      tokenNumber: result.queueEntry.tokenNumber,
-      timestamp: result.queueEntry.checkedInAt,
-    });
-
-    return result;
+    return queueRepository.checkInWithRetry(appointmentId);
   },
 
   /**
@@ -181,48 +193,22 @@ export const queueService = {
     const todayStr = getTodayDateString();
     const dateObj = parseDateOnly(todayStr);
 
-    const result = await queueRepository.callNext(doctorId, dateObj);
-
-    recordQueueEvent(QUEUE_EVENT_TYPES.CALLED_NEXT, {
-      doctorId,
-      queueEntryId: result.queueEntry.id,
-      tokenNumber: result.queueEntry.tokenNumber,
-      appointmentId: result.appointment.id,
-      timestamp: result.queueEntry.calledAt,
-    });
-
-    return result;
+    return queueRepository.callNext(doctorId, dateObj);
   },
 
   /**
    * Staff completes consultation: IN_CONSULTATION -> COMPLETED
+   * QueueEvent is atomically recorded within the database transaction in queueRepository.
    */
   complete: async (entryId) => {
-    const result = await queueRepository.completeConsultation(entryId);
-
-    recordQueueEvent(QUEUE_EVENT_TYPES.COMPLETED, {
-      queueEntryId: result.queueEntry.id,
-      tokenNumber: result.queueEntry.tokenNumber,
-      appointmentId: result.appointment.id,
-      timestamp: result.queueEntry.completedAt,
-    });
-
-    return result;
+    return queueRepository.completeConsultation(entryId);
   },
 
   /**
    * Staff skips patient: WAITING -> SKIPPED (Appointment -> NO_SHOW)
+   * QueueEvent is atomically recorded within the database transaction in queueRepository.
    */
   skip: async (entryId) => {
-    const result = await queueRepository.skipPatient(entryId);
-
-    recordQueueEvent(QUEUE_EVENT_TYPES.SKIPPED, {
-      queueEntryId: result.queueEntry.id,
-      tokenNumber: result.queueEntry.tokenNumber,
-      appointmentId: result.appointment.id,
-      timestamp: new Date(),
-    });
-
-    return result;
+    return queueRepository.skipPatient(entryId);
   },
 };

@@ -2,13 +2,14 @@ import prisma from '../config/prisma.js';
 import { AppError } from '../utils/appError.js';
 import { assertTransition } from '../services/appointmentStateMachine.js';
 import { formatDateOnly, getTodayDateString } from '../utils/dateTime.js';
+import { recordQueueEvent, QUEUE_EVENT_TYPES } from '../events/queueEvents.js';
 
 export const queueRepository = {
   /**
    * Check in an appointment with retry on token number collision (up to 3 times)
    * All check-in steps are executed inside a single transaction.
    */
-  checkInWithRetry: async (appointmentId, maxRetries = 3) => {
+  checkInWithRetry: async (appointmentId, maxRetries = 15) => {
     let attempts = 0;
 
     while (attempts < maxRetries) {
@@ -79,6 +80,19 @@ export const queueRepository = {
             include: { doctor: true },
           });
 
+          // 8. Record QueueEvent INSIDE the exact same database transaction
+          await recordQueueEvent(tx, {
+            type: QUEUE_EVENT_TYPES.CHECKED_IN,
+            doctorId: appointment.doctorId,
+            appointmentId,
+            tokenNumber: nextToken,
+            details: {
+              patientName: appointment.patientName,
+              slotStart: appointment.slotStart,
+              checkedInAt: queueEntry.checkedInAt,
+            },
+          });
+
           // Return consistent response with no schedule and no nested duplicate appointment
           return {
             queueEntry: {
@@ -109,6 +123,7 @@ export const queueRepository = {
         // If unique constraint hit on (doctorId, queueDate, tokenNumber), retry
         if (err.code === 'P2002' && attempts < maxRetries - 1) {
           attempts++;
+          await new Promise((resolve) => setTimeout(resolve, Math.floor(Math.random() * 20 + 5)));
           continue;
         }
         throw err;
@@ -303,6 +318,19 @@ export const queueRepository = {
         },
       });
 
+      // 6. Record QueueEvent INSIDE the exact same database transaction
+      await recordQueueEvent(tx, {
+        type: QUEUE_EVENT_TYPES.CALLED,
+        doctorId,
+        appointmentId: nextEntry.appointmentId,
+        tokenNumber: nextEntry.tokenNumber,
+        details: {
+          patientName: nextEntry.appointment.patientName,
+          slotStart: nextEntry.appointment.slotStart,
+          calledAt: now,
+        },
+      });
+
       return {
         queueEntry: updatedQueueEntry,
         appointment: updatedAppointment,
@@ -355,6 +383,28 @@ export const queueRepository = {
         },
       });
 
+      // Calculate actual consultation duration in minutes
+      const durationMs = entry.calledAt
+        ? Math.max(0, now.getTime() - new Date(entry.calledAt).getTime())
+        : 0;
+      const durationMinutes = entry.calledAt ? Math.max(1, Math.round(durationMs / 60000)) : null;
+
+      // Record QueueEvent (COMPLETED with durationMinutes) INSIDE the exact same database transaction
+      await recordQueueEvent(tx, {
+        type: QUEUE_EVENT_TYPES.COMPLETED,
+        doctorId: entry.doctorId,
+        appointmentId: entry.appointmentId,
+        tokenNumber: entry.tokenNumber,
+        durationMinutes,
+        details: {
+          patientName: entry.appointment.patientName,
+          slotStart: entry.appointment.slotStart,
+          calledAt: entry.calledAt,
+          completedAt: now,
+          durationMinutes,
+        },
+      });
+
       return {
         queueEntry: updatedQueueEntry,
         appointment: updatedAppointment,
@@ -401,6 +451,19 @@ export const queueRepository = {
         where: { id: entry.appointmentId },
         data: {
           status: 'NO_SHOW',
+        },
+      });
+
+      // Record QueueEvent (SKIPPED) INSIDE the exact same database transaction
+      await recordQueueEvent(tx, {
+        type: QUEUE_EVENT_TYPES.SKIPPED,
+        doctorId: entry.doctorId,
+        appointmentId: entry.appointmentId,
+        tokenNumber: entry.tokenNumber,
+        details: {
+          patientName: entry.appointment.patientName,
+          slotStart: entry.appointment.slotStart,
+          skippedAt: new Date(),
         },
       });
 
