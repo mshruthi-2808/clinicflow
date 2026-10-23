@@ -1,6 +1,9 @@
 # ClinicFlow 🩺
 
 > A demo-ready outpatient department (OPD) appointment scheduling, live queue tracking, and wait-time estimation web application built as a college mini project.
+>
+> 🌐 **Live Production Application**: [https://clinicflow-opd.vercel.app](https://clinicflow-opd.vercel.app)  
+> *(Alternative mirror: [https://clinicflow-care.vercel.app](https://clinicflow-care.vercel.app))*
 
 ---
 
