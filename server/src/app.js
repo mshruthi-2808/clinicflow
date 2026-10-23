@@ -37,7 +37,8 @@ app.use(
         allowedOrigins.includes(origin) ||
         /^http:\/\/(localhost|127\.0\.0\.1):\d+$/.test(origin) ||
         /^https:\/\/.*\.vercel\.app$/.test(origin) ||
-        /^https:\/\/.*\.trycloudflare\.com$/.test(origin)
+        /^https:\/\/.*\.trycloudflare\.com$/.test(origin) ||
+        /^https:\/\/.*\.loca\.lt$/.test(origin)
       ) {
         return callback(null, true);
       }
