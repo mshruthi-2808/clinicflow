@@ -8,6 +8,7 @@ import {
   generateSlotIntervals,
   getTodayDateString,
   getCurrentTimeString,
+  getCurrentMinutesInKolkata,
   timeToMinutes,
 } from '../utils/dateTime.js';
 
@@ -22,18 +23,22 @@ export const appointmentService = {
       throw new AppError(400, 'DOCTOR_INACTIVE', 'Cannot book appointment with an inactive doctor');
     }
 
-    // 2. Reject past dates
+    // 2. Reject past dates (evaluated in clinic timezone Asia/Kolkata)
     const todayStr = getTodayDateString();
     if (dateStr < todayStr) {
       throw new AppError(400, 'PAST_DATE', 'Cannot book an appointment for a past date');
     }
 
-    // 3. Reject past times for today
+    // 3. Reject past times for today (evaluated in clinic timezone Asia/Kolkata)
     if (dateStr === todayStr) {
-      const currentMinutes = timeToMinutes(getCurrentTimeString());
+      const currentMinutes = getCurrentMinutesInKolkata();
       const slotMinutes = timeToMinutes(slotStart);
       if (slotMinutes <= currentMinutes) {
-        throw new AppError(400, 'PAST_TIME', 'Cannot book an appointment for a past time slot');
+        throw new AppError(
+          400,
+          'PAST_TIME',
+          `Cannot book an appointment for past time slot ${slotStart}. Current clinic time (Asia/Kolkata) is ${getCurrentTimeString()}.`
+        );
       }
     }
 

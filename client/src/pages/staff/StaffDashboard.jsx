@@ -14,15 +14,9 @@ import {
 } from 'lucide-react';
 import { useStats } from '../../hooks/useStats.js';
 import { useDoctors } from '../../hooks/useDoctors.js';
+import { getKolkataDateString } from '../../utils/dateTime.js';
 
-function getLocalDateString(d = new Date()) {
-  const year = d.getFullYear();
-  const month = String(d.getMonth() + 1).padStart(2, '0');
-  const day = String(d.getDate()).padStart(2, '0');
-  return `${year}-${month}-${day}`;
-}
-
-const todayStr = getLocalDateString();
+const todayStr = getKolkataDateString();
 
 export default function StaffDashboard() {
   const [selectedDate, setSelectedDate] = useState(todayStr);

@@ -21,14 +21,9 @@ import { useDebounce } from '../../hooks/useDebounce.js';
 import StatusBadge from '../../components/StatusBadge.jsx';
 import ConfirmModal from '../../components/ConfirmModal.jsx';
 
-function getLocalDateString(d = new Date()) {
-  const year = d.getFullYear();
-  const month = String(d.getMonth() + 1).padStart(2, '0');
-  const day = String(d.getDate()).padStart(2, '0');
-  return `${year}-${month}-${day}`;
-}
+import { getKolkataDateString } from '../../utils/dateTime.js';
 
-const todayStr = getLocalDateString();
+const todayStr = getKolkataDateString();
 
 export default function StaffAppointments() {
   // Filters

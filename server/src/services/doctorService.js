@@ -8,6 +8,7 @@ import {
   generateSlotIntervals,
   getTodayDateString,
   getCurrentTimeString,
+  getCurrentMinutesInKolkata,
   timeToMinutes,
 } from '../utils/dateTime.js';
 
@@ -112,18 +113,19 @@ export const doctorService = {
     const bookedSet = new Set(activeAppointments.map((apt) => apt.slotStart));
 
     const isToday = dateString === todayStr;
-    const currentMinutes = isToday ? timeToMinutes(getCurrentTimeString()) : -1;
+    const currentMinutes = isToday ? getCurrentMinutesInKolkata() : -1;
 
     const slots = [];
     for (const slot of intervals) {
-      // Exclude past slots when the date is today
-      if (isToday && timeToMinutes(slot) <= currentMinutes) {
-        continue;
-      }
+      const isPast = isToday && timeToMinutes(slot) <= currentMinutes;
+      const isBooked = bookedSet.has(slot);
+      const isAvailable = !isPast && !isBooked;
 
       slots.push({
         slotStart: slot,
-        isAvailable: !bookedSet.has(slot),
+        isAvailable,
+        isBooked,
+        isPast,
       });
     }
 

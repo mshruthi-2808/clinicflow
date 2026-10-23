@@ -19,24 +19,17 @@ import { useSlots } from '../hooks/useSlots.js';
 import { useCreateAppointment } from '../hooks/useAppointments.js';
 import { SlotGridSkeleton } from '../components/Skeleton.jsx';
 import StatusBadge from '../components/StatusBadge.jsx';
+import {
+  getKolkataDateString,
+  getKolkataTomorrowDateString,
+  getKolkataTimeString,
+  timeToMinutes,
+} from '../utils/dateTime.js';
 
-// Helper for local YYYY-MM-DD string
-function getLocalDateString(d = new Date()) {
-  const year = d.getFullYear();
-  const month = String(d.getMonth() + 1).padStart(2, '0');
-  const day = String(d.getDate()).padStart(2, '0');
-  return `${year}-${month}-${day}`;
-}
-
-const todayStr = getLocalDateString();
-const tomorrowDate = new Date();
-tomorrowDate.setDate(tomorrowDate.getDate() + 1);
-const tomorrowStr = getLocalDateString(tomorrowDate);
-
-// Initial State for booking workflow
+// Initial State for booking workflow (evaluated in Asia/Kolkata timezone)
 const initialBookingState = {
   step: 'CHOOSE_SLOT', // 'CHOOSE_SLOT' | 'ENTER_DETAILS' | 'CONFIRMED'
-  date: todayStr,
+  date: getKolkataDateString(),
   selectedSlot: null,
   confirmedAppointment: null,
   serverError: null,
@@ -84,7 +77,7 @@ function bookingReducer(state, action) {
     case 'RESET':
       return {
         ...initialBookingState,
-        date: todayStr,
+        date: getKolkataDateString(),
       };
     default:
       return state;
@@ -97,18 +90,36 @@ export default function DoctorDetail() {
   const [bookingState, dispatch] = useReducer(bookingReducer, initialBookingState);
   const [copiedId, setCopiedId] = React.useState(false);
 
+  // Live current time in clinic timezone (Asia/Kolkata) that ticks every 10 seconds
+  const [currentKolkataTime, setCurrentKolkataTime] = React.useState(() => getKolkataTimeString());
+  const [currentKolkataDate, setCurrentKolkataDate] = React.useState(() => getKolkataDateString());
+
+  React.useEffect(() => {
+    const timer = setInterval(() => {
+      setCurrentKolkataTime(getKolkataTimeString());
+      setCurrentKolkataDate(getKolkataDateString());
+    }, 10000); // Check every 10s
+
+    return () => clearInterval(timer);
+  }, []);
+
+  const todayStr = currentKolkataDate;
+  const tomorrowStr = getKolkataTomorrowDateString();
+
   // Fetch Doctor info
   const { data: doctor, isLoading: isLoadingDoctor, isError: isDoctorError, error: doctorError } =
     useDoctor(doctorId);
 
-  // Fetch Available Slots for selected date
+  // Fetch Available Slots for selected date (refreshes periodically to catch newly booked/passed slots)
   const {
     data: slots = [],
     isLoading: isLoadingSlots,
     isError: isSlotsError,
     error: slotsError,
     refetch: refetchSlots,
-  } = useSlots(doctorId, bookingState.date);
+  } = useSlots(doctorId, bookingState.date, {
+    refetchInterval: 30000,
+  });
 
   // Mutation for booking
   const createAppointmentMutation = useCreateAppointment();
@@ -134,6 +145,20 @@ export default function DoctorDetail() {
   const handleBookingSubmit = async (formData) => {
     dispatch({ type: 'CLEAR_ERROR' });
 
+    // Client-side guard: check if slot has passed while user was filling out form
+    const nowKolkataDate = getKolkataDateString();
+    const nowKolkataTime = getKolkataTimeString();
+    if (
+      bookingState.date === nowKolkataDate &&
+      timeToMinutes(bookingState.selectedSlot) <= timeToMinutes(nowKolkataTime)
+    ) {
+      const msg = `The ${bookingState.selectedSlot} slot has already passed for today. Please select another available time slot.`;
+      dispatch({ type: 'SET_SERVER_ERROR', payload: msg });
+      dispatch({ type: 'BACK_TO_SLOTS' });
+      refetchSlots();
+      return;
+    }
+
     const payload = {
       doctorId,
       patientName: formData.patientName.trim(),
@@ -148,10 +173,13 @@ export default function DoctorDetail() {
       dispatch({ type: 'BOOKING_SUCCESS', payload: created });
       resetForm();
     } catch (err) {
-      // In case of conflict (e.g. 409 SLOT_ALREADY_BOOKED), display friendly message and refresh slots
+      // In case of conflict (e.g. 409 SLOT_ALREADY_BOOKED or 400 PAST_TIME), display friendly message and refresh slots
       const readableMsg =
-        err.message || 'This slot was just booked by another patient. Please choose an available time slot.';
+        err.message || 'This slot is no longer available. Please choose another available time slot.';
       dispatch({ type: 'SET_SERVER_ERROR', payload: readableMsg });
+      if (err.code === 'PAST_TIME' || err.code === 'SLOT_ALREADY_BOOKED' || err.code === 'PAST_DATE') {
+        dispatch({ type: 'BACK_TO_SLOTS' });
+      }
       refetchSlots();
     }
   };
@@ -194,7 +222,26 @@ export default function DoctorDetail() {
   }
 
   const specName = doctor.specialisation?.name || 'General OPD';
-  const availableSlotsCount = slots.filter((s) => s.isAvailable).length;
+
+  // Process slots against current live Asia/Kolkata clinic time
+  const isSelectedDateToday = bookingState.date === currentKolkataDate;
+  const currentMinutes = isSelectedDateToday ? timeToMinutes(currentKolkataTime) : -1;
+
+  const processedSlots = slots.map((slot) => {
+    const slotMin = timeToMinutes(slot.slotStart);
+    const isPast = isSelectedDateToday && (slot.isPast || slotMin <= currentMinutes);
+    const isBooked = Boolean(slot.isBooked);
+    const isAvailable = Boolean(slot.isAvailable) && !isPast && !isBooked;
+
+    return {
+      ...slot,
+      isAvailable,
+      isBooked,
+      isPast,
+    };
+  });
+
+  const availableSlotsCount = processedSlots.filter((s) => s.isAvailable).length;
 
   return (
     <div className="flex-1 max-w-5xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-8 sm:py-10 space-y-8">
@@ -387,7 +434,7 @@ export default function DoctorDetail() {
                 </span>
                 <span className="flex items-center gap-1.5">
                   <span className="w-2.5 h-2.5 rounded-sm bg-slate-100 border border-slate-300" />
-                  Booked / Unavailable
+                  Booked / Passed
                 </span>
               </div>
             </div>
@@ -407,7 +454,7 @@ export default function DoctorDetail() {
                   Retry Slots
                 </button>
               </div>
-            ) : slots.length === 0 ? (
+            ) : processedSlots.length === 0 ? (
               <div className="p-8 bg-slate-50 border border-slate-200 rounded-xl text-center space-y-2">
                 <Clock className="w-8 h-8 text-slate-400 mx-auto" />
                 <p className="text-sm font-semibold text-slate-800">No slots available for this day</p>
@@ -417,8 +464,10 @@ export default function DoctorDetail() {
               </div>
             ) : (
               <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-6 gap-2.5">
-                {slots.map((slot) => {
+                {processedSlots.map((slot) => {
                   const isAvailable = slot.isAvailable;
+                  const isPast = slot.isPast;
+                  const isBooked = slot.isBooked;
 
                   return (
                     <button
@@ -429,17 +478,31 @@ export default function DoctorDetail() {
                       className={`relative flex flex-col items-center justify-center p-3 rounded-xl border text-center transition-all ${
                         isAvailable
                           ? 'bg-teal-50/60 hover:bg-teal-600 border-teal-200 hover:border-teal-600 text-teal-900 hover:text-white cursor-pointer shadow-2xs hover:shadow focus:outline-none focus:ring-2 focus:ring-teal-500'
-                          : 'bg-slate-100 border-slate-200 text-slate-600 cursor-not-allowed opacity-60'
+                          : isPast
+                          ? 'bg-slate-100/70 border-slate-200 text-slate-400 cursor-not-allowed opacity-50'
+                          : 'bg-slate-100 border-slate-200 text-slate-500 cursor-not-allowed opacity-60'
                       }`}
-                      aria-label={`${slot.slotStart} slot ${isAvailable ? 'available' : 'booked'}`}
+                      aria-label={`${slot.slotStart} slot ${
+                        isAvailable ? 'available' : isPast ? 'passed' : 'booked'
+                      }`}
                     >
-                      <span className="text-sm font-bold tracking-tight">{slot.slotStart}</span>
                       <span
-                        className={`text-[10px] mt-0.5 uppercase tracking-wider font-semibold ${
-                          isAvailable ? 'text-teal-700 group-hover:text-teal-100' : 'text-slate-600'
+                        className={`text-sm font-bold tracking-tight ${
+                          isPast ? 'line-through text-slate-400' : ''
                         }`}
                       >
-                        {isAvailable ? 'Available' : 'Booked'}
+                        {slot.slotStart}
+                      </span>
+                      <span
+                        className={`text-[10px] mt-0.5 uppercase tracking-wider font-semibold ${
+                          isAvailable
+                            ? 'text-teal-700 group-hover:text-teal-100'
+                            : isPast
+                            ? 'text-slate-400'
+                            : 'text-slate-500'
+                        }`}
+                      >
+                        {isAvailable ? 'Available' : isPast ? 'Passed' : 'Booked'}
                       </span>
                     </button>
                   );
