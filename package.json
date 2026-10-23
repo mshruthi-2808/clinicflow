@@ -4,7 +4,19 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "benchmark": "node scripts/benchmark-index.js",
-    "race-test": "node scripts/race-test.js"
+    "dev": "concurrently -k -p \"[{name}]\" -n \"SERVER,CLIENT\" -c \"cyan,magenta\" \"npm --prefix server run dev\" \"npm --prefix client run dev\"",
+    "dev:server": "npm --prefix server run dev",
+    "dev:client": "npm --prefix client run dev",
+    "test": "npm --prefix server test",
+    "build": "npm --prefix client run build",
+    "db:migrate": "npm --prefix server run db:migrate",
+    "db:seed": "npm --prefix server run db:seed",
+    "db:reset": "npm --prefix server run db:reset",
+    "benchmark": "npm --prefix server run benchmark",
+    "race-test": "npm --prefix server run race-test"
+  },
+  "devDependencies": {
+    "concurrently": "^10.0.6",
+    "dotenv": "^18.0.9"
   }
 }

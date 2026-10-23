@@ -288,7 +288,7 @@ async function runRaceTests() {
     }))
   );
 
-  const successfulCheckIns = checkInResults.filter((r) => (r.status === 200 || r.status === 201) && r.success);
+  const successfulCheckIns = checkInResults.filter((r) => r.status === 201 && r.success);
   const issuedTokens = checkInResults.map((r) => r.tokenNumber).filter(Boolean);
   const sortedTokens = [...issuedTokens].sort((a, b) => a - b);
 
@@ -312,7 +312,7 @@ async function runRaceTests() {
   }
 
   console.log('\nConcurrency Assertions:');
-  console.log(`  1. All 10 check-in requests succeeded (200 OK): ${allSucceeded ? '✓ YES' : '✗ NO'}`);
+  console.log(`  1. All 10 check-in requests succeeded (201 Created): ${allSucceeded ? '✓ YES' : '✗ NO'}`);
   console.log(`  2. All 10 issued tokens are unique (no duplicates): ${isUnique ? '✓ YES' : '✗ NO'}`);
   console.log(`  3. Tokens are strictly consecutive & gap-free (${baselineToken + 1} to ${baselineToken + 10}): ${isGapFree ? '✓ YES' : '✗ NO'}`);
 

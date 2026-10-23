@@ -11,7 +11,8 @@
     "db:seed": "node prisma/seed.js",
     "db:reset": "prisma migrate reset --force",
     "benchmark": "node ../scripts/benchmark-index.js",
-    "race-test": "node ../scripts/race-test.js"
+    "race-test": "node ../scripts/race-test.js",
+    "test": "vitest run"
   },
   "prisma": {
     "seed": "node prisma/seed.js"
@@ -29,6 +30,8 @@
     "zod": "^4.6.7"
   },
   "devDependencies": {
-    "prisma": "^6.4.1"
+    "prisma": "^6.4.1",
+    "supertest": "^7.3.1",
+    "vitest": "^5.0.5"
   }
 }

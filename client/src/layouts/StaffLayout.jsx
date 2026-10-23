@@ -75,7 +75,7 @@ export default function StaffLayout() {
                 Clinic<span className="text-teal-400">Flow</span>
               </span>
               <span className="block text-[10px] font-mono uppercase tracking-wider text-teal-400">
-                Staff Console
+                Staff Console (Demo)
               </span>
             </div>
           </div>

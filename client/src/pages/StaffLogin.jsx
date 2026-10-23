@@ -72,9 +72,12 @@ export default function StaffLogin() {
           <div className="w-14 h-14 bg-teal-500/20 text-teal-400 border border-teal-500/30 rounded-2xl flex items-center justify-center mx-auto shadow-md">
             <ShieldCheck className="w-8 h-8" />
           </div>
+          <div className="inline-block px-2.5 py-0.5 rounded-full bg-amber-500/10 border border-amber-500/30 text-amber-400 text-[10px] font-bold uppercase tracking-wider">
+            Demonstration Login
+          </div>
           <h1 className="text-2xl font-black tracking-tight text-white">Staff Management Portal</h1>
           <p className="text-xs text-slate-400">
-            Sign in with administrative credentials to access OPD queue consoles and records.
+            Demonstration login for academic evaluation and clinical workflow walkthroughs.
           </p>
         </div>
 
