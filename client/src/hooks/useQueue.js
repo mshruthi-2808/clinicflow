@@ -2,24 +2,24 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { queueApi } from '../api/queue.js';
 import { useToast } from '../context/ToastContext.jsx';
 
-// 1. Patient Queue Tracking Hook (polls every 10s and on window focus)
+// 1. Patient Queue Tracking Hook (polls every 10s and on window focus, backs off on error)
 export function useQueueTracking(appointmentId) {
   return useQuery({
     queryKey: ['queueTracking', appointmentId],
     queryFn: () => queueApi.getAppointmentQueueView(appointmentId),
     enabled: Boolean(appointmentId),
-    refetchInterval: 10000, // 10 seconds
+    refetchInterval: (query) => (query.state.status === 'error' ? 30000 : 10000),
     refetchOnWindowFocus: true,
   });
 }
 
-// 2. Staff Live Doctor Queue Hook (polls every 5s)
+// 2. Staff Live Doctor Queue Hook (polls every 5s, backs off on error)
 export function useDoctorQueue(doctorId, date, options = {}) {
   return useQuery({
     queryKey: ['doctorQueue', doctorId, date],
     queryFn: () => queueApi.getDoctorQueue(doctorId, date),
     enabled: Boolean(doctorId),
-    refetchInterval: 5000, // 5 seconds live monitor
+    refetchInterval: (query) => (query.state.status === 'error' ? 30000 : 5000),
     refetchOnWindowFocus: true,
     ...options,
   });

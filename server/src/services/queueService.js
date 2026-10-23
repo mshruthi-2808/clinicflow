@@ -12,9 +12,10 @@ export const queueService = {
    * Uses a CTE on COMPLETED QueueEvent records from the last 7 days.
    * Falls back to the doctor's configured consultationMinutes when fewer than 3 completed.
    * @param {string} doctorId
+   * @param {number|null} [fallbackMinutes]
    * @returns {Promise<number>}
    */
-  getAverageConsultMinutes: async (doctorId) => {
+  getAverageConsultMinutes: async (doctorId, fallbackMinutes = null) => {
     const rows = await prisma.$queryRaw`
       WITH recent_completed AS (
         SELECT "durationMinutes"
@@ -33,6 +34,10 @@ export const queueService = {
     const stats = rows && rows[0];
     if (stats && stats.count >= 3 && stats.avgMinutes !== null && stats.avgMinutes !== undefined) {
       return Number(stats.avgMinutes);
+    }
+
+    if (fallbackMinutes !== null && fallbackMinutes !== undefined) {
+      return fallbackMinutes;
     }
 
     const doctor = await doctorRepository.findById(doctorId);
@@ -60,22 +65,25 @@ export const queueService = {
   },
 
   /**
-   * Retrieves the live queue for a specific doctor on a given date
+   * Retrieves the live queue for a specific doctor on a given date (parallelized)
    */
   getDoctorQueue: async (doctorId, dateString) => {
-    const doctor = await doctorRepository.findById(doctorId);
+    const dateStr = dateString || getTodayDateString();
+    const dateObj = parseDateOnly(dateStr);
+
+    // Fetch doctor, in-consultation entry, and live queue rows in parallel
+    const [doctor, inConsultationEntry, rows] = await Promise.all([
+      doctorRepository.findById(doctorId),
+      queueRepository.findCurrentInConsultation(doctorId, dateObj),
+      queueRepository.getDoctorLiveQueue(doctorId, dateObj),
+    ]);
+
     if (!doctor) {
       throw new AppError(404, 'NOT_FOUND', 'Doctor not found');
     }
 
-    const dateStr = dateString || getTodayDateString();
-    const dateObj = parseDateOnly(dateStr);
-
-    const avgMinutes = await queueService.getAverageConsultMinutes(doctorId);
-    const inConsultationEntry = await queueRepository.findCurrentInConsultation(doctorId, dateObj);
+    const avgMinutes = await queueService.getAverageConsultMinutes(doctorId, doctor.consultationMinutes);
     const remainingMinutes = queueService.getRemainingInConsultationMinutes(inConsultationEntry, avgMinutes);
-
-    const rows = await queueRepository.getDoctorLiveQueue(doctorId, dateObj);
 
     const entries = rows.map((row) => {
       const position = row.position !== null ? Number(row.position) : null;
@@ -122,7 +130,7 @@ export const queueService = {
       currentlyInConsultation: inConsultationEntry
         ? {
             tokenNumber: inConsultationEntry.tokenNumber,
-            patientName: inConsultationEntry.appointment.patientName,
+            patientName: inConsultationEntry.appointment?.patientName,
             calledAt: inConsultationEntry.calledAt,
           }
         : null,
@@ -131,7 +139,7 @@ export const queueService = {
   },
 
   /**
-   * Retrieves the patient's own view of their queue progress using appointment ID
+   * Retrieves the patient's own view of their queue progress using appointment ID (parallelized)
    */
   getAppointmentQueueView: async (appointmentId) => {
     const appointment = await appointmentRepository.findById(appointmentId);
@@ -154,26 +162,19 @@ export const queueService = {
       };
     }
 
-    const avgMinutes = await queueService.getAverageConsultMinutes(appointment.doctorId);
-    const inConsultationEntry = await queueRepository.findCurrentInConsultation(
-      appointment.doctorId,
-      entry.queueDate
-    );
+    const [avgMinutes, inConsultationEntry, position] = await Promise.all([
+      queueService.getAverageConsultMinutes(appointment.doctorId, appointment.doctor?.consultationMinutes),
+      queueRepository.findCurrentInConsultation(appointment.doctorId, entry.queueDate),
+      entry.status === 'WAITING'
+        ? queueRepository.getWaitingPositionForToken(entry.doctorId, entry.queueDate, entry.tokenNumber)
+        : Promise.resolve(null),
+    ]);
+
     const remainingMinutes = queueService.getRemainingInConsultationMinutes(inConsultationEntry, avgMinutes);
-
-    let position = null;
-    let patientsAhead = 0;
-    let estimatedWaitMinutes = 0;
-
-    if (entry.status === 'WAITING') {
-      position = await queueRepository.getWaitingPositionForToken(
-        entry.doctorId,
-        entry.queueDate,
-        entry.tokenNumber
-      );
-      patientsAhead = Math.max(0, position - 1);
-      estimatedWaitMinutes = patientsAhead * avgMinutes + remainingMinutes;
-    }
+    const patientsAhead = position !== null ? Math.max(0, position - 1) : 0;
+    const estimatedWaitMinutes = entry.status === 'WAITING'
+      ? patientsAhead * avgMinutes + remainingMinutes
+      : 0;
 
     return {
       token: entry.tokenNumber,

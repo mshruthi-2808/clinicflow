@@ -9,6 +9,7 @@ import { errorHandler } from './middleware/errorHandler.js';
 import apiRoutes from './routes/index.js';
 
 const app = express();
+app.set('trust proxy', 1);
 
 // 1. Security HTTP headers
 app.use(helmet());
@@ -58,10 +59,11 @@ if (process.env.NODE_ENV !== 'test') {
 }
 
 // 5. Rate limiting on all API routes
-app.use('/api', apiLimiter);
+app.use(['/api', '/v1'], apiLimiter);
 
-// 6. Mount API v1 router
+// 6. Mount API v1 router on both /api/v1 and /v1 (flexible serverless / proxy pathing)
 app.use('/api/v1', apiRoutes);
+app.use('/v1', apiRoutes);
 
 // 7. 404 handler
 app.use(notFoundHandler);

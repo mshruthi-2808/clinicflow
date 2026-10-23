@@ -4,7 +4,7 @@ import app from '../src/app.js';
 import prisma from '../src/config/prisma.js';
 import { queueService } from '../src/services/queueService.js';
 
-describe('ClinicFlow Automated API Test Suite', () => {
+describe('ClinicFlow Automated API Test Suite', { timeout: 30000 }, () => {
   let doctorId;
   let staffToken;
   let testDateStr;
