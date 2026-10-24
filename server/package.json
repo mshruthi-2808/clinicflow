@@ -12,7 +12,7 @@
     "db:reset": "prisma migrate reset --force",
     "benchmark": "node ../scripts/benchmark-index.js",
     "race-test": "node ../scripts/race-test.js",
-    "test": "vitest run"
+    "test": "vitest run --fileParallelism=false"
   },
   "prisma": {
     "seed": "node prisma/seed.js"

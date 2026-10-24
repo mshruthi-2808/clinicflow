@@ -172,13 +172,22 @@ describe('ClinicFlow Automated API Test Suite', { timeout: 30000 }, () => {
     expect(res.body.error.code).toBe('INVALID_STATUS_TRANSITION');
 
     // Clean up
-    await prisma.appointment.delete({ where: { id: apt.id } });
+    await prisma.appointment.deleteMany({ where: { id: apt.id } });
   });
 
   // -------------------------------------------------------------------------
-  // 5. Check-In Token Sequence & Duplicate Check-In Prevention
-  // -------------------------------------------------------------------------
   it('5. Check-In Token Sequence: issues sequential tokens and rejects duplicate check-ins', async () => {
+    // Clear any lingering test bookings for slots 05:00 and 05:15
+    await prisma.queueEvent.deleteMany({
+      where: { appointment: { doctorId, slotStart: { in: ['05:00', '05:15'] } } },
+    });
+    await prisma.queueEntry.deleteMany({
+      where: { appointment: { doctorId, slotStart: { in: ['05:00', '05:15'] } } },
+    });
+    await prisma.appointment.deleteMany({
+      where: { doctorId, slotStart: { in: ['05:00', '05:15'] } },
+    });
+
     // Create two test appointments for today
     const apt1 = await prisma.appointment.create({
       data: {
@@ -251,22 +260,28 @@ describe('ClinicFlow Automated API Test Suite', { timeout: 30000 }, () => {
   // 6. Call-Next and Complete Flow
   // -------------------------------------------------------------------------
   it('6. Call-Next and Complete: transitions WAITING -> IN_CONSULTATION -> COMPLETED', async () => {
-    // 1. Ensure doctor has no active consultation currently
-    const active = await prisma.queueEntry.findFirst({
+    // 1. Ensure doctor has no active consultation or waiting entries currently
+    await prisma.queueEntry.updateMany({
       where: {
         doctorId,
         queueDate: new Date(`${testTodayStr}T00:00:00.000Z`),
-        status: 'IN_CONSULTATION',
+        status: { in: ['IN_CONSULTATION', 'WAITING'] },
       },
+      data: { status: 'COMPLETED', completedAt: new Date() },
     });
-    if (active) {
-      await prisma.queueEntry.update({
-        where: { id: active.id },
-        data: { status: 'COMPLETED', completedAt: new Date() },
-      });
-    }
 
-    // 2. Create and check-in a test appointment
+    // 2. Clear any lingering test booking for slot 05:30
+    await prisma.queueEvent.deleteMany({
+      where: { appointment: { doctorId, slotStart: '05:30' } },
+    });
+    await prisma.queueEntry.deleteMany({
+      where: { appointment: { doctorId, slotStart: '05:30' } },
+    });
+    await prisma.appointment.deleteMany({
+      where: { doctorId, slotStart: '05:30' },
+    });
+
+    // Create and check-in a test appointment
     const apt = await prisma.appointment.create({
       data: {
         doctorId,
@@ -362,6 +377,6 @@ describe('ClinicFlow Automated API Test Suite', { timeout: 30000 }, () => {
     // Clean up
     await prisma.queueEvent.deleteMany({ where: { appointmentId: apt.id } });
     await prisma.queueEntry.deleteMany({ where: { appointmentId: apt.id } });
-    await prisma.appointment.delete({ where: { id: apt.id } });
+    await prisma.appointment.deleteMany({ where: { id: apt.id } });
   });
 });

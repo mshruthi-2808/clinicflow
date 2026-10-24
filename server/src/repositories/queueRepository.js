@@ -4,113 +4,113 @@ import { assertTransition } from '../services/appointmentStateMachine.js';
 import { formatDateOnly, getTodayDateString } from '../utils/dateTime.js';
 import { recordQueueEvent, QUEUE_EVENT_TYPES } from '../events/queueEvents.js';
 
+const TX_OPTIONS = { maxWait: 10000, timeout: 20000 };
+
 export const queueRepository = {
   /**
-   * Check in an appointment with retry on token number collision (up to 3 times)
-   * All check-in steps are executed inside a single transaction.
+   * Check in an appointment with retry on token number collision (up to 15 times).
+   * Pre-validates outside the transaction and keeps queries inside transaction minimal.
    */
   checkInWithRetry: async (appointmentId, maxRetries = 15) => {
+    // 1. Pre-validate appointment outside transaction to keep transaction minimal
+    const appointment = await prisma.appointment.findUnique({
+      where: { id: appointmentId },
+      include: { doctor: true },
+    });
+
+    if (!appointment) {
+      throw new AppError(404, 'NOT_FOUND', 'Appointment not found');
+    }
+
+    // 2. Reject duplicate check-in if patient is already checked in
+    if (appointment.status === 'CHECKED_IN') {
+      throw new AppError(409, 'ALREADY_CHECKED_IN', 'This patient is already checked in');
+    }
+
+    // 3. Assert transition BOOKED -> CHECKED_IN
+    assertTransition(appointment.status, 'CHECKED_IN');
+
+    // 4. Reject if appointment is not for today
+    const todayStr = getTodayDateString();
+    const aptDateStr = formatDateOnly(appointment.appointmentDate);
+    if (aptDateStr !== todayStr) {
+      throw new AppError(
+        400,
+        'INVALID_CHECKIN_DATE',
+        `Cannot check in for an appointment on ${aptDateStr}. Check-in is only allowed on the appointment day (${todayStr}).`
+      );
+    }
+
     let attempts = 0;
 
     while (attempts < maxRetries) {
       try {
-        return await prisma.$transaction(async (tx) => {
-          // 1. Load appointment
-          const appointment = await tx.appointment.findUnique({
-            where: { id: appointmentId },
-            include: { doctor: true },
-          });
+        return await prisma.$transaction(
+          async (tx) => {
+            // Compute the next token for that doctor and date as max(tokenNumber) + 1
+            const maxTokenAgg = await tx.queueEntry.aggregate({
+              where: {
+                doctorId: appointment.doctorId,
+                queueDate: appointment.appointmentDate,
+              },
+              _max: {
+                tokenNumber: true,
+              },
+            });
 
-          if (!appointment) {
-            throw new AppError(404, 'NOT_FOUND', 'Appointment not found');
-          }
+            const nextToken = (maxTokenAgg._max.tokenNumber || 0) + 1;
 
-          // 2. Reject duplicate check-in if patient is already checked in or has a QueueEntry
-          const existingEntry = await tx.queueEntry.findUnique({
-            where: { appointmentId },
-          });
+            // Create QueueEntry (WAITING)
+            const queueEntry = await tx.queueEntry.create({
+              data: {
+                appointmentId,
+                doctorId: appointment.doctorId,
+                queueDate: appointment.appointmentDate,
+                tokenNumber: nextToken,
+                status: 'WAITING',
+                checkedInAt: new Date(),
+              },
+            });
 
-          if (existingEntry || appointment.status === 'CHECKED_IN') {
-            throw new AppError(409, 'ALREADY_CHECKED_IN', 'This patient is already checked in');
-          }
+            // Update appointment status to CHECKED_IN
+            const updatedAppointment = await tx.appointment.update({
+              where: { id: appointmentId },
+              data: { status: 'CHECKED_IN' },
+              include: { doctor: true },
+            });
 
-          // 3. Assert transition BOOKED -> CHECKED_IN
-          assertTransition(appointment.status, 'CHECKED_IN');
-
-          // 4. Reject if appointment is not for today
-          const todayStr = getTodayDateString();
-          const aptDateStr = formatDateOnly(appointment.appointmentDate);
-          if (aptDateStr !== todayStr) {
-            throw new AppError(
-              400,
-              'INVALID_CHECKIN_DATE',
-              `Cannot check in for an appointment on ${aptDateStr}. Check-in is only allowed on the appointment day (${todayStr}).`
-            );
-          }
-
-          // 5. Compute the next token for that doctor and date as max(tokenNumber) + 1
-          const maxTokenAgg = await tx.queueEntry.aggregate({
-            where: {
+            // Record QueueEvent INSIDE the exact same database transaction
+            await recordQueueEvent(tx, {
+              type: QUEUE_EVENT_TYPES.CHECKED_IN,
               doctorId: appointment.doctorId,
-              queueDate: appointment.appointmentDate,
-            },
-            _max: {
-              tokenNumber: true,
-            },
-          });
-
-          const nextToken = (maxTokenAgg._max.tokenNumber || 0) + 1;
-
-          // 6. Create QueueEntry (WAITING)
-          const queueEntry = await tx.queueEntry.create({
-            data: {
               appointmentId,
-              doctorId: appointment.doctorId,
-              queueDate: appointment.appointmentDate,
               tokenNumber: nextToken,
-              status: 'WAITING',
-              checkedInAt: new Date(),
-            },
-          });
+              details: {
+                patientName: appointment.patientName,
+                slotStart: appointment.slotStart,
+                checkedInAt: queueEntry.checkedInAt,
+              },
+            });
 
-          // 7. Update appointment status to CHECKED_IN
-          const updatedAppointment = await tx.appointment.update({
-            where: { id: appointmentId },
-            data: { status: 'CHECKED_IN' },
-            include: { doctor: true },
-          });
-
-          // 8. Record QueueEvent INSIDE the exact same database transaction
-          await recordQueueEvent(tx, {
-            type: QUEUE_EVENT_TYPES.CHECKED_IN,
-            doctorId: appointment.doctorId,
-            appointmentId,
-            tokenNumber: nextToken,
-            details: {
-              patientName: appointment.patientName,
-              slotStart: appointment.slotStart,
-              checkedInAt: queueEntry.checkedInAt,
-            },
-          });
-
-          // Return consistent response with no schedule and no nested duplicate appointment
-          return {
-            queueEntry: {
-              id: queueEntry.id,
-              tokenNumber: queueEntry.tokenNumber,
-              status: queueEntry.status,
-              checkedInAt: queueEntry.checkedInAt,
-            },
-            appointment: {
-              id: updatedAppointment.id,
-              patientName: updatedAppointment.patientName,
-              appointmentDate: formatDateOnly(updatedAppointment.appointmentDate),
-              slotStart: updatedAppointment.slotStart,
-              status: updatedAppointment.status,
-              doctorName: updatedAppointment.doctor.name,
-            },
-          };
-        });
+            return {
+              queueEntry: {
+                id: queueEntry.id,
+                tokenNumber: queueEntry.tokenNumber,
+                status: queueEntry.status,
+                checkedInAt: queueEntry.checkedInAt,
+              },
+              appointment: {
+                id: updatedAppointment.id,
+                patientName: updatedAppointment.patientName,
+                appointmentDate: formatDateOnly(updatedAppointment.appointmentDate),
+                slotStart: updatedAppointment.slotStart,
+                status: updatedAppointment.status,
+                doctorName: updatedAppointment.doctor.name,
+              },
+            };
+          },
+          TX_OPTIONS
+        );
       } catch (err) {
         // If unique constraint hit on appointmentId (already checked in)
         if (
@@ -251,226 +251,244 @@ export const queueRepository = {
    * Staff calls next patient: picks lowest-token WAITING entry and sets IN_CONSULTATION
    */
   callNext: async (doctorId, dateObj) => {
-    return prisma.$transaction(async (tx) => {
-      // 1. Reject if doctor already has someone in consultation
-      const busy = await tx.queueEntry.findFirst({
-        where: {
+    return prisma.$transaction(
+      async (tx) => {
+        // 1. Reject if doctor already has someone in consultation
+        const busy = await tx.queueEntry.findFirst({
+          where: {
+            doctorId,
+            queueDate: dateObj,
+            status: 'IN_CONSULTATION',
+          },
+          select: {
+            tokenNumber: true,
+            appointment: {
+              select: { patientName: true },
+            },
+          },
+        });
+
+        if (busy) {
+          throw new AppError(
+            409,
+            'DOCTOR_ALREADY_BUSY',
+            `Doctor currently has token #${busy.tokenNumber} (${busy.appointment?.patientName || 'patient'}) in consultation`
+          );
+        }
+
+        // 2. Pick lowest-token WAITING entry
+        const nextEntry = await tx.queueEntry.findFirst({
+          where: {
+            doctorId,
+            queueDate: dateObj,
+            status: 'WAITING',
+          },
+          orderBy: {
+            tokenNumber: 'asc',
+          },
+          include: {
+            appointment: true,
+            doctor: true,
+          },
+        });
+
+        if (!nextEntry) {
+          throw new AppError(409, 'QUEUE_EMPTY', 'No patients currently waiting in the queue for this doctor');
+        }
+
+        // 3. Assert transition on appointment: CHECKED_IN -> IN_CONSULTATION
+        assertTransition(nextEntry.appointment.status, 'IN_CONSULTATION');
+
+        const now = new Date();
+
+        // 4. Update QueueEntry to IN_CONSULTATION
+        const updatedQueueEntry = await tx.queueEntry.update({
+          where: { id: nextEntry.id },
+          data: {
+            status: 'IN_CONSULTATION',
+            calledAt: now,
+          },
+          include: {
+            appointment: true,
+            doctor: true,
+          },
+        });
+
+        // 5. Update Appointment to IN_CONSULTATION
+        const updatedAppointment = await tx.appointment.update({
+          where: { id: nextEntry.appointmentId },
+          data: {
+            status: 'IN_CONSULTATION',
+          },
+        });
+
+        // 6. Record QueueEvent INSIDE the exact same database transaction
+        await recordQueueEvent(tx, {
+          type: QUEUE_EVENT_TYPES.CALLED,
           doctorId,
-          queueDate: dateObj,
-          status: 'IN_CONSULTATION',
-        },
-        include: {
-          appointment: true,
-        },
-      });
+          appointmentId: nextEntry.appointmentId,
+          tokenNumber: nextEntry.tokenNumber,
+          details: {
+            patientName: nextEntry.appointment.patientName,
+            slotStart: nextEntry.appointment.slotStart,
+            calledAt: now,
+          },
+        });
 
-      if (busy) {
-        throw new AppError(
-          409,
-          'DOCTOR_ALREADY_BUSY',
-          `Doctor currently has token #${busy.tokenNumber} (${busy.appointment.patientName}) in consultation`
-        );
-      }
-
-      // 2. Pick lowest-token WAITING entry
-      const nextEntry = await tx.queueEntry.findFirst({
-        where: {
-          doctorId,
-          queueDate: dateObj,
-          status: 'WAITING',
-        },
-        orderBy: {
-          tokenNumber: 'asc',
-        },
-        include: {
-          appointment: true,
-          doctor: true,
-        },
-      });
-
-      if (!nextEntry) {
-        throw new AppError(409, 'QUEUE_EMPTY', 'No patients currently waiting in the queue for this doctor');
-      }
-
-      // 3. Assert transition on appointment: CHECKED_IN -> IN_CONSULTATION
-      assertTransition(nextEntry.appointment.status, 'IN_CONSULTATION');
-
-      const now = new Date();
-
-      // 4. Update QueueEntry to IN_CONSULTATION
-      const updatedQueueEntry = await tx.queueEntry.update({
-        where: { id: nextEntry.id },
-        data: {
-          status: 'IN_CONSULTATION',
-          calledAt: now,
-        },
-        include: {
-          appointment: true,
-          doctor: true,
-        },
-      });
-
-      // 5. Update Appointment to IN_CONSULTATION
-      const updatedAppointment = await tx.appointment.update({
-        where: { id: nextEntry.appointmentId },
-        data: {
-          status: 'IN_CONSULTATION',
-        },
-      });
-
-      // 6. Record QueueEvent INSIDE the exact same database transaction
-      await recordQueueEvent(tx, {
-        type: QUEUE_EVENT_TYPES.CALLED,
-        doctorId,
-        appointmentId: nextEntry.appointmentId,
-        tokenNumber: nextEntry.tokenNumber,
-        details: {
-          patientName: nextEntry.appointment.patientName,
-          slotStart: nextEntry.appointment.slotStart,
-          calledAt: now,
-        },
-      });
-
-      return {
-        queueEntry: updatedQueueEntry,
-        appointment: updatedAppointment,
-      };
-    });
+        return {
+          queueEntry: updatedQueueEntry,
+          appointment: updatedAppointment,
+        };
+      },
+      TX_OPTIONS
+    );
   },
 
   /**
    * Staff completes consultation: IN_CONSULTATION -> COMPLETED
+   * Pre-validates outside transaction to keep queries inside transaction minimal.
    */
   completeConsultation: async (entryId) => {
-    return prisma.$transaction(async (tx) => {
-      const entry = await tx.queueEntry.findUnique({
-        where: { id: entryId },
-        include: { appointment: true, doctor: true },
-      });
-
-      if (!entry) {
-        throw new AppError(404, 'NOT_FOUND', 'Queue entry not found');
-      }
-
-      if (entry.status !== 'IN_CONSULTATION') {
-        throw new AppError(
-          409,
-          'INVALID_STATUS_TRANSITION',
-          `Cannot complete consultation for token #${entry.tokenNumber} because current status is '${entry.status}'. Must be 'IN_CONSULTATION'.`
-        );
-      }
-
-      assertTransition(entry.appointment.status, 'COMPLETED');
-
-      const now = new Date();
-
-      const updatedQueueEntry = await tx.queueEntry.update({
-        where: { id: entryId },
-        data: {
-          status: 'COMPLETED',
-          completedAt: now,
-        },
-        include: {
-          appointment: true,
-          doctor: true,
-        },
-      });
-
-      const updatedAppointment = await tx.appointment.update({
-        where: { id: entry.appointmentId },
-        data: {
-          status: 'COMPLETED',
-        },
-      });
-
-      // Calculate actual consultation duration in minutes
-      const durationMs = entry.calledAt
-        ? Math.max(0, now.getTime() - new Date(entry.calledAt).getTime())
-        : 0;
-      const durationMinutes = entry.calledAt ? Math.max(1, Math.round(durationMs / 60000)) : null;
-
-      // Record QueueEvent (COMPLETED with durationMinutes) INSIDE the exact same database transaction
-      await recordQueueEvent(tx, {
-        type: QUEUE_EVENT_TYPES.COMPLETED,
-        doctorId: entry.doctorId,
-        appointmentId: entry.appointmentId,
-        tokenNumber: entry.tokenNumber,
-        durationMinutes,
-        details: {
-          patientName: entry.appointment.patientName,
-          slotStart: entry.appointment.slotStart,
-          calledAt: entry.calledAt,
-          completedAt: now,
-          durationMinutes,
-        },
-      });
-
-      return {
-        queueEntry: updatedQueueEntry,
-        appointment: updatedAppointment,
-      };
+    // 1. Fetch entry and validate outside transaction to keep transaction minimal
+    const entry = await prisma.queueEntry.findUnique({
+      where: { id: entryId },
+      include: { appointment: true, doctor: true },
     });
+
+    if (!entry) {
+      throw new AppError(404, 'NOT_FOUND', 'Queue entry not found');
+    }
+
+    if (entry.status !== 'IN_CONSULTATION') {
+      throw new AppError(
+        409,
+        'INVALID_STATUS_TRANSITION',
+        `Cannot complete consultation for token #${entry.tokenNumber} because current status is '${entry.status}'. Must be 'IN_CONSULTATION'.`
+      );
+    }
+
+    assertTransition(entry.appointment.status, 'COMPLETED');
+
+    const now = new Date();
+
+    // Calculate actual consultation duration in minutes
+    const durationMs = entry.calledAt
+      ? Math.max(0, now.getTime() - new Date(entry.calledAt).getTime())
+      : 0;
+    const durationMinutes = entry.calledAt ? Math.max(1, Math.round(durationMs / 60000)) : null;
+
+    // 2. Perform only the atomic writes and event recording inside the transaction
+    return prisma.$transaction(
+      async (tx) => {
+        const updatedQueueEntry = await tx.queueEntry.update({
+          where: { id: entryId },
+          data: {
+            status: 'COMPLETED',
+            completedAt: now,
+          },
+          include: {
+            appointment: true,
+            doctor: true,
+          },
+        });
+
+        const updatedAppointment = await tx.appointment.update({
+          where: { id: entry.appointmentId },
+          data: {
+            status: 'COMPLETED',
+          },
+        });
+
+        // Record QueueEvent (COMPLETED with durationMinutes) INSIDE the exact same database transaction
+        await recordQueueEvent(tx, {
+          type: QUEUE_EVENT_TYPES.COMPLETED,
+          doctorId: entry.doctorId,
+          appointmentId: entry.appointmentId,
+          tokenNumber: entry.tokenNumber,
+          durationMinutes,
+          details: {
+            patientName: entry.appointment.patientName,
+            slotStart: entry.appointment.slotStart,
+            calledAt: entry.calledAt,
+            completedAt: now,
+            durationMinutes,
+          },
+        });
+
+        return {
+          queueEntry: updatedQueueEntry,
+          appointment: updatedAppointment,
+        };
+      },
+      TX_OPTIONS
+    );
   },
 
   /**
    * Staff skips patient: WAITING -> SKIPPED and appointment -> NO_SHOW
+   * Pre-validates outside transaction to keep queries inside transaction minimal.
    */
   skipPatient: async (entryId) => {
-    return prisma.$transaction(async (tx) => {
-      const entry = await tx.queueEntry.findUnique({
-        where: { id: entryId },
-        include: { appointment: true, doctor: true },
-      });
-
-      if (!entry) {
-        throw new AppError(404, 'NOT_FOUND', 'Queue entry not found');
-      }
-
-      if (entry.status !== 'WAITING') {
-        throw new AppError(
-          409,
-          'INVALID_STATUS_TRANSITION',
-          `Cannot skip token #${entry.tokenNumber} because current status is '${entry.status}'. Only 'WAITING' patients can be skipped.`
-        );
-      }
-
-      assertTransition(entry.appointment.status, 'NO_SHOW');
-
-      const updatedQueueEntry = await tx.queueEntry.update({
-        where: { id: entryId },
-        data: {
-          status: 'SKIPPED',
-        },
-        include: {
-          appointment: true,
-          doctor: true,
-        },
-      });
-
-      const updatedAppointment = await tx.appointment.update({
-        where: { id: entry.appointmentId },
-        data: {
-          status: 'NO_SHOW',
-        },
-      });
-
-      // Record QueueEvent (SKIPPED) INSIDE the exact same database transaction
-      await recordQueueEvent(tx, {
-        type: QUEUE_EVENT_TYPES.SKIPPED,
-        doctorId: entry.doctorId,
-        appointmentId: entry.appointmentId,
-        tokenNumber: entry.tokenNumber,
-        details: {
-          patientName: entry.appointment.patientName,
-          slotStart: entry.appointment.slotStart,
-          skippedAt: new Date(),
-        },
-      });
-
-      return {
-        queueEntry: updatedQueueEntry,
-        appointment: updatedAppointment,
-      };
+    // 1. Fetch entry and validate outside transaction
+    const entry = await prisma.queueEntry.findUnique({
+      where: { id: entryId },
+      include: { appointment: true, doctor: true },
     });
+
+    if (!entry) {
+      throw new AppError(404, 'NOT_FOUND', 'Queue entry not found');
+    }
+
+    if (entry.status !== 'WAITING') {
+      throw new AppError(
+        409,
+        'INVALID_STATUS_TRANSITION',
+        `Cannot skip token #${entry.tokenNumber} because current status is '${entry.status}'. Only 'WAITING' patients can be skipped.`
+      );
+    }
+
+    assertTransition(entry.appointment.status, 'NO_SHOW');
+
+    // 2. Perform only atomic writes and event recording inside the transaction
+    return prisma.$transaction(
+      async (tx) => {
+        const updatedQueueEntry = await tx.queueEntry.update({
+          where: { id: entryId },
+          data: {
+            status: 'SKIPPED',
+          },
+          include: {
+            appointment: true,
+            doctor: true,
+          },
+        });
+
+        const updatedAppointment = await tx.appointment.update({
+          where: { id: entry.appointmentId },
+          data: {
+            status: 'NO_SHOW',
+          },
+        });
+
+        // Record QueueEvent (SKIPPED) INSIDE the exact same database transaction
+        await recordQueueEvent(tx, {
+          type: QUEUE_EVENT_TYPES.SKIPPED,
+          doctorId: entry.doctorId,
+          appointmentId: entry.appointmentId,
+          tokenNumber: entry.tokenNumber,
+          details: {
+            patientName: entry.appointment.patientName,
+            slotStart: entry.appointment.slotStart,
+            skippedAt: new Date(),
+          },
+        });
+
+        return {
+          queueEntry: updatedQueueEntry,
+          appointment: updatedAppointment,
+        };
+      },
+      TX_OPTIONS
+    );
   },
 };
